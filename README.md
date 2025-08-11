@@ -7,17 +7,18 @@ data.go.kr (기획재정부_공공기관 채용정보 조회서비스)를 MCP �
 python -m venv .venv
 # Windows
 .venv\Scripts\activate
+pip install -U pip setuptools wheel
+pip install -r requirements.txt
+pip install .
+
 # macOS/Linux
 # source .venv/bin/activate
-
-pip install -e .
-copy .env.example .env  # Windows (macOS/Linux는: cp .env.example .env)
 # .env에 DATA_GO_KR_KEY (Decoding 키) 입력
 ```
 
 ## 실행
 ```bash
-recruitment-mcp
+python chatbot.py
 ```
 
 ## 사용
