@@ -16,7 +16,7 @@ pip install mcp fastmcp httpx python-dotenv
 
 ## 실행
 ```bash
-python integration_chatbot.py
+python integrated_chatbot.py
 ```
 
 ## 사용
