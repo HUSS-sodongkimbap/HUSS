@@ -3,22 +3,20 @@
 data.go.kr (기획재정부_공공기관 채용정보 조회서비스)를 MCP 서버로 감싼 예제.
 
 ## 설치
-```bash
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-pip install -U pip setuptools wheel
-pip install -r requirements.txt
-pip install .
+# 1. 가상환경 생성
+conda create -n mcp-project python=3.12
 
-# macOS/Linux
-# source .venv/bin/activate
-# .env에 DATA_GO_KR_KEY (Decoding 키) 입력
-```
+# 2. 활성화  
+conda activate mcp-project
+
+python -m pip install -U pip setuptools wheel
+
+pip install mcp fastmcp httpx python-dotenv
+
 
 ## 실행
 ```bash
-python chatbot.py
+python integration_chatbot.py
 ```
 
 ## 사용
