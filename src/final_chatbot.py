@@ -317,7 +317,109 @@ class PerfectChatbot:
             
         return "\n".join(output)
     
+    def filter_and_sort_jobs_by_region(self, jobs: List[Dict], target_region_code: str) -> List[Dict]:
+        """채용정보를 지역 관련성에 따라 정렬 (개선된 버전)"""
+        # 지역 코드 → 우선순위 키워드 매핑
+        region_mapping = {
+            "11110": ["종로", "서울"],          # 종로구 → 종로 우선, 서울 차순위
+            "11680": ["강남", "서울"], 
+            "11170": ["용산", "서울"],
+            "11200": ["성동", "서울"],
+            "11215": ["광진", "서울"],
+            "44131": ["천안", "충남", "충청"],   # 천안시 → 천안 우선, 충남 차순위
+            "42150": ["강릉", "강원"],          # 강릉시 → 강릉 우선, 강원 차순위
+            "44790": ["청양", "충남", "충청"]
+        }
+        
+        if target_region_code not in region_mapping:
+            return jobs[:10]  # 매핑 없으면 상위 10개만
+        
+        target_keywords = region_mapping[target_region_code]
+        
+        def calculate_job_score(job):
+            """채용공고의 지역 관련성 점수 계산"""
+            work_region = job.get("workRgnNmLst", "").replace(" ", "")
+            
+            if not work_region:
+                return (999, 0)  # 지역 정보 없으면 최하위
+            
+            # 지역 개수 계산 (콤마로 구분)
+            region_count = work_region.count(',') + 1 if work_region else 0
+            
+            # 관련성 점수 계산
+            relevance_score = 999  # 기본값 (관련 없음)
+            
+            for i, keyword in enumerate(target_keywords):
+                if keyword in work_region:
+                    relevance_score = i  # 첫 번째 키워드가 가장 높은 점수
+                    break
+            
+            # 정렬 기준: (관련성 점수, 지역 개수)
+            # 관련성 점수가 낮을수록 우선 (0이 최고), 지역 개수가 적을수록 우선
+            return (relevance_score, region_count)
+        
+        # 모든 채용공고에 점수 부여 후 정렬
+        scored_jobs = [(job, calculate_job_score(job)) for job in jobs]
+        sorted_jobs = sorted(scored_jobs, key=lambda x: x[1])
+        
+        # 상위 15개만 반환 (너무 많으면 부담)
+        result_jobs = [job for job, score in sorted_jobs[:15]]
+        
+        return result_jobs
+    
     def filter_and_sort_policies_by_region(self, policies: List[Dict], target_region_code: str) -> List[Dict]:
+        """청소년정책을 지역 관련성에 따라 정렬 (일자리와 동일한 알고리즘)"""
+        # 지역 코드 → 우선순위 키워드 매핑 (일자리와 동일)
+        region_mapping = {
+            "11110": ["종로", "서울"],          # 종로구
+            "11680": ["강남", "서울"], 
+            "11170": ["용산", "서울"],
+            "11200": ["성동", "서울"],
+            "11215": ["광진", "서울"],
+            "44131": ["천안", "충남", "충청"],   # 천안시
+            "42150": ["강릉", "강원"],          # 강릉시
+            "44790": ["청양", "충남", "충청"]
+        }
+        
+        if target_region_code not in region_mapping:
+            return policies[:10]  # 매핑 없으면 상위 10개만
+        
+        target_keywords = region_mapping[target_region_code]
+        
+        def calculate_policy_score(policy):
+            """정책의 지역 관련성 점수 계산"""
+            # 1. 담당기관명에서 지역 키워드 찾기
+            institution = policy.get("sprvsnInstCdNm", "").replace(" ", "")
+            
+            # 2. zipCd에서 지역 범위 확인
+            zip_codes = policy.get('zipCd', '')
+            region_count = len(zip_codes.split(',')) if zip_codes and ',' in zip_codes else 1
+            
+            # 3. 관련성 점수 계산
+            relevance_score = 999  # 기본값 (관련 없음)
+            
+            # 담당기관명에서 키워드 매칭
+            for i, keyword in enumerate(target_keywords):
+                if keyword in institution:
+                    relevance_score = i  # 첫 번째 키워드가 가장 높은 점수
+                    break
+            
+            # zipCd에 해당 지역 코드가 포함되어 있는지 확인
+            if relevance_score == 999 and zip_codes:  # 담당기관으로 매칭 안됐을 때
+                if target_region_code in zip_codes:
+                    relevance_score = len(target_keywords)  # 마지막 순위로 설정
+            
+            # 정렬 기준: (관련성 점수, 지역 개수)
+            return (relevance_score, region_count)
+        
+        # 모든 정책에 점수 부여 후 정렬
+        scored_policies = [(policy, calculate_policy_score(policy)) for policy in policies]
+        sorted_policies = sorted(scored_policies, key=lambda x: x[1])
+        
+        # 상위 15개만 반환
+        result_policies = [policy for policy, score in sorted_policies[:15]]
+        
+        return result_policies
         """청소년정책을 지역 관련성에 따라 정렬 (일자리와 동일한 알고리즘)"""
         # 지역 코드 → 우선순위 키워드 매핑 (일자리와 동일)
         region_mapping = {
