@@ -1,4 +1,4 @@
-# perfect_chatbot.py — 완벽한 통합 챗봇 (정책 조회 + 날짜 필터링)
+# perfect_chatbot.py — 완벽한 통합 챗봇 (정책 조회 + 날짜 필터링 + 5개 지역 한정)
 import asyncio
 import json
 import re
@@ -12,14 +12,32 @@ from enhanced_orchestrator import EnhancedOrchestrator
 class PerfectChatbot:
     def __init__(self):
         self.orchestrator = EnhancedOrchestrator()
+
+        # ✅ 이 챗봇은 아래 5개 지역만 지원합니다.
+        # 정선군(51770), 영월군(51750), 청양군(44790), 강릉시(51150), 김제시(52210)
+        self.allowed_regions_code_to_name = {
+            "51770": "정선군",
+            "51750": "영월군",
+            "44790": "청양군",
+            "51150": "강릉시",
+            "52210": "김제시",
+        }
+        self.allowed_regions_name_to_code = {
+            "정선": "51770", "정선군": "51770",
+            "영월": "51750", "영월군": "51750",
+            "청양": "44790", "청양군": "44790",
+            "강릉": "51150", "강릉시": "51150",
+            "김제": "52210", "김제시": "52210",
+        }
+
         self.state = {
             "raw": False,
             "max_results": 10,
-            "region_code": "11110",  # 기본: 종로구
-            "deal_ymd": "202506",     # 기본: 2025년 6월
-            "job_field": None         # 직무 분야 필터
+            "region_code": "44790",  # ✅ 기본: 청양군
+            "deal_ymd": "202506",    # 기본: 2025년 6월
+            "job_field": None        # 직무 분야 필터
         }
-        
+
         # API 명세서의 정확한 직무 분야 매핑 (기존 코드 그대로)
         self.job_fields = {
             "사업관리": "R600001",
@@ -48,86 +66,80 @@ class PerfectChatbot:
             "농림어업": "R600024",
             "연구": "R600025"
         }
-        
+
         # 직무 분야 키워드 매핑 (자연어 인식용)
         self.job_keywords = {
-            "통신": "정보통신", "IT": "정보통신", "개발": "정보통신", "프로그래밍": "정보통신",
+            "통신": "정보통신", "it": "정보통신", "개발": "정보통신", "프로그래밍": "정보통신",
             "의료": "보건.의료", "병원": "보건.의료", "간호": "보건.의료",
             "교육": "교육.자연.사회과학", "선생님": "교육.자연.사회과학", "강사": "교육.자연.사회과학",
             "경영": "경영.회계.사무", "회계": "경영.회계.사무", "사무": "경영.회계.사무",
             "건설": "건설", "건축": "건설",
-            "연구": "연구", "개발": "연구"
+            "연구": "연구"
         }
-    
+
     def print_help(self):
         print("""
-🤖 통합 챗봇 명령어 가이드
+🤖 통합 챗봇 명령어 가이드  (지원 지역: 정선·영월·청양·강릉·김제)
 
 [자연어 검색]
-  "종로구에서 통신 관련 일자리와 아파트 매물, 정책 알려줘"
-  "강남구 의료 분야 채용공고와 실거래가 보여줘"
-  "천안시 IT 일자리와 주거 정보, 청년 정책 검색해줘"
+  "강릉시 IT 일자리와 아파트 매물, 정책 알려줘"
+  "영월군 의료 분야 채용공고와 실거래가 보여줘"
   "청양군 정책만 알려줘"
-  "종로구 아파트 실거래가만 보여줘"
-  
+  "김제시 아파트 실거래가만 보여줘"
+
 [설정 명령어]
-  /region <법정동코드>               → 지역 설정 (예: /region 11680)
-  /date <YYYYMM>                    → 부동산 거래 년월 설정
-  /jobs <숫자>                      → 채용정보 결과 개수 설정
-  /field <분야명>                   → 직무 분야 설정
+  /region <코드|이름>              → 지역 설정 (예: /region 42150 또는 /region 강릉시)
+  /date <YYYYMM>                   → 부동산 거래 년월 설정
+  /jobs <숫자>                     → 채용정보 결과 개수 설정
+  /field <분야명>                  → 직무 분야 설정
   /show                            → 현재 설정 보기
   /help                            → 도움말
   /exit                            → 종료
 
 [지역 코드 참고]
-  11110: 종로구    11680: 강남구    11170: 용산구
-  44131: 천안시    42150: 강릉시    44790: 청양군
+  51770: 정선군    51750: 영월군    44790: 청양군
+  51150: 강릉시    52210: 김제시
 """.strip())
-    
+
     def analyze_user_intent(self, user_input: str) -> Dict[str, Any]:
-        """사용자 입력을 분석해서 의도 파악 (정책 검색 추가)"""
+        """사용자 입력을 분석해서 의도 파악 (정책 검색 추가 + 지역 5개 한정)"""
         text = user_input.lower().replace(" ", "")
-        
+
         intent = {
             "type": "unknown",
             "search_jobs": False,
             "search_realestate": False,
-            "search_policies": False,  # 정책 검색 추가
+            "search_policies": False,
             "filters": {},
             "region_mentioned": None
         }
-        
-        # 지역 감지
+
+        # ✅ 지역 감지: 5개 지역만
         region_mapping = {
-            "종로": "11110", "종로구": "11110",
-            "강남": "11680", "강남구": "11680", 
-            "용산": "11170", "용산구": "11170",
-            "성동": "11200", "성동구": "11200",
-            "광진": "11215", "광진구": "11215",
-            "천안": "44131", "천안시": "44131",
-            "강릉": "42150", "강릉시": "42150",
+            "정선": "51770", "정선군": "51770",
+            "영월": "51750", "영월군": "51750",
             "청양": "44790", "청양군": "44790",
+            "강릉": "51150", "강릉시": "51150",
+            "김제": "52210", "김제시": "52210",
         }
-        
         for region_name, code in region_mapping.items():
             if region_name in text:
                 intent["region_mentioned"] = code
                 break
-        
+
         # 검색 유형 감지
         job_keywords = ["채용", "구인", "일자리", "취업", "인턴", "공채", "모집", "구직", "직장"]
         realestate_keywords = ["아파트", "부동산", "실거래가", "매매", "집", "주택", "오피스텔", "매물"]
-        policy_keywords = ["정책", "지원", "혜택", "복지", "청년정책", "청소년정책"]  # 정책 키워드 추가
+        policy_keywords = ["정책", "지원", "혜택", "복지", "청년정책"]
         living_keywords = ["살곳", "살", "거주", "이사", "정착", "생활"]
-        
+
         has_job = any(keyword in text for keyword in job_keywords)
         has_realestate = any(keyword in text for keyword in realestate_keywords + living_keywords)
-        has_policy = any(keyword in text for keyword in policy_keywords)  # 정책 검색 감지
-        
-        # 검색 유형 결정 (정책 추가)
+        has_policy = any(keyword in text for keyword in policy_keywords)
+
+        # 검색 유형 결정
         search_count = sum([has_job, has_realestate, has_policy])
-        
-        if search_count >= 2:  # 2개 이상이면 통합 검색
+        if search_count >= 2:
             intent["type"] = "comprehensive"
             intent["search_jobs"] = has_job
             intent["search_realestate"] = has_realestate
@@ -138,15 +150,15 @@ class PerfectChatbot:
         elif has_realestate:
             intent["type"] = "realestate_only"
             intent["search_realestate"] = True
-        elif has_policy:  # 정책만 검색
+        elif has_policy:
             intent["type"] = "policies_only"
             intent["search_policies"] = True
         elif any(keyword in text for keyword in ["통합", "전체", "모든", "다"]):
-            intent["type"] = "comprehensive" 
+            intent["type"] = "comprehensive"
             intent["search_jobs"] = True
             intent["search_realestate"] = True
             intent["search_policies"] = True
-        
+
         # 채용 필터 감지 (기존과 동일)
         if "청년" in text and "인턴" in text:
             intent["filters"]["hireTypeLst"] = "R1050,R1060,R1070"
@@ -154,57 +166,47 @@ class PerfectChatbot:
             intent["filters"]["hireTypeLst"] = "R1010"
         elif "계약직" in text or "비정규" in text:
             intent["filters"]["hireTypeLst"] = "R1040"
-        
+
         if "학력무관" in text:
             intent["filters"]["acbgCondLst"] = "R7010"
         elif "대졸" in text or "4년제" in text:
             intent["filters"]["acbgCondLst"] = "R7050"
-        
+
         # 직무 분야 필터 감지 (키워드 매핑 추가)
         detected_field = None
-        
-        # 1. 정확한 분야명 매칭
         for field_name, code in self.job_fields.items():
             if field_name in text:
                 detected_field = code
                 break
-        
-        # 2. 키워드 매핑으로 매칭
         if not detected_field:
             for keyword, field_name in self.job_keywords.items():
                 if keyword in text and field_name in self.job_fields:
                     detected_field = self.job_fields[field_name]
                     break
-        
         if detected_field:
             intent["filters"]["ncsCdLst"] = detected_field
-        
+
         return intent
-    
+
     def get_region_name(self, region_code: str) -> str:
-        """지역 코드를 지역명으로 변환"""
-        code_to_name = {
-            "11110": "종로구", "11680": "강남구", "11170": "용산구",
-            "11200": "성동구", "11215": "광진구", "44131": "천안시",
-            "42150": "강릉시", "44790": "청양군"
-        }
-        return code_to_name.get(region_code, f"지역코드 {region_code}")
-    
+        """지역 코드를 지역명으로 변환(5개 한정)"""
+        return self.allowed_regions_code_to_name.get(region_code, f"지원하지 않는 지역({region_code})")
+
     def filter_active_policies(self, policies: List[Dict]) -> List[Dict]:
         """현재 날짜 기준으로 유효한 정책만 필터링"""
         today = datetime.now().strftime("%Y%m%d")
         active_policies = []
-        
+
         for policy in policies:
             is_active = True
-            
+
             # 1. 사업 종료일 체크
             biz_end_date = policy.get("bizPrdEndYmd", "")
             if biz_end_date and len(biz_end_date) == 8 and biz_end_date.isdigit():
                 if biz_end_date < today:
                     is_active = False
                     continue
-            
+
             # 2. 신청 마감일 체크 (aplyYmd에서 종료일 추출)
             apply_period = policy.get("aplyYmd", "")
             if apply_period and " ~ " in apply_period:
@@ -216,26 +218,26 @@ class PerfectChatbot:
                             is_active = False
                             continue
             elif apply_period and len(apply_period) == 8 and apply_period.isdigit():
-                # 단일 날짜인 경우 (마감일로 간주)
                 if apply_period < today:
                     is_active = False
                     continue
-            
+
             # 3. 상시 신청이거나 날짜 정보가 없으면 활성으로 간주
             if is_active:
                 active_policies.append(policy)
-        
+
         return active_policies
-    
+
     def format_job_results(self, results: List[Dict], limit: int = 5, region_name: str = "") -> str:
-        """채용정보 결과를 보기 좋게 포맷 (지역 관련성 표시 추가)"""
+        """채용정보 결과를 보기 좋게 포맷"""
         if not results:
             if region_name:
-                return f"📋 **{region_name} 지역의 채용정보를 찾을 수 없습니다.**\n\n💡 **제안:**\n- 인근 도시나 도 단위로 검색해보세요\n- 원격근무 가능한 직종을 찾아보세요"
+                return (f"📋 **{region_name} 지역의 채용정보를 찾을 수 없습니다.**\n\n"
+                        f"💡 **제안:**\n- 인근 시·군으로 확장해보세요\n- 원격근무 가능한 직종을 찾아보세요")
             return "📋 채용정보를 찾을 수 없습니다."
-        
+
         output = [f"📋 **채용정보** (총 {len(results)}건, 지역 관련성 순)\n"]
-        
+
         for i, job in enumerate(results[:limit], 1):
             title = job.get("recrutPbancTtl", "제목 없음")
             company = job.get("instNm", "기관명 없음")
@@ -243,12 +245,10 @@ class PerfectChatbot:
             region = job.get("workRgnNmLst", "")
             deadline = job.get("pbancEndYmd", "")
             ncs_field = job.get("ncsCdNmLst", "")
-            
-            # 날짜 포맷팅
+
             if deadline and len(deadline) == 8:
                 deadline = f"{deadline[:4]}.{deadline[4:6]}.{deadline[6:]}"
-            
-            # 지역 표시 방식 개선
+
             region_display = region
             if region:
                 region_count = region.count(',') + 1
@@ -258,11 +258,10 @@ class PerfectChatbot:
                     region_display = f"{region.split(',')[0]} 외 {region_count-1}개 지역"
                 else:
                     region_display = region
-            
+
             output.append(f"{'='*50}")
             output.append(f"📍 **{i}. {company}** ({hire_type})")
             output.append(f"📌 **{title}**")
-            
             if region_display:
                 output.append(f"🌍 **근무지역**: {region_display}")
             if deadline:
@@ -270,16 +269,16 @@ class PerfectChatbot:
             if ncs_field:
                 output.append(f"🔧 **직무분야**: {ncs_field}")
             output.append("")
-            
+
         return "\n".join(output)
-    
+
     def format_realestate_results(self, apt_data: List[Dict], limit: int = 5) -> str:
-        """부동산 결과를 보기 좋게 포맷 (기존과 동일)"""
+        """부동산 결과 포맷"""
         if not apt_data:
             return "🏠 부동산 거래 정보를 찾을 수 없습니다."
-        
+
         output = [f"🏠 **아파트 실거래가** (총 {len(apt_data)}건 중 상위 {min(limit, len(apt_data))}건)\n"]
-        
+
         for i, apt in enumerate(apt_data[:limit], 1):
             name = apt.get("aptNm", "아파트명 없음")
             price = apt.get("dealAmount", "가격정보없음")
@@ -287,8 +286,7 @@ class PerfectChatbot:
             floor = apt.get("floor", "층수정보없음")
             year = apt.get("buildYear", "건축년도없음")
             dong = apt.get("umdNm", "동정보없음")
-            
-            # 가격 포맷팅
+
             if price and price.replace(",", "").isdigit():
                 price_int = int(price.replace(",", ""))
                 if price_int >= 10000:
@@ -302,37 +300,34 @@ class PerfectChatbot:
                     price_formatted = f"{price_int:,}만원"
             else:
                 price_formatted = price
-            
+
             output.append(f"{i}. **{name}** ({dong})")
             output.append(f"   💰 {price_formatted} | {area}㎡ | {floor}층 | {year}년")
             output.append("")
-        
+
         return "\n".join(output)
-    
+
     def format_policy_results(self, policies: List[Dict], limit: int = 5, region_name: str = "") -> str:
-        """청소년정책 결과를 상세 정보와 함께 보기 좋게 포맷 (개선된 날짜 포맷팅)"""
+        """청년정책 결과 포맷"""
         if not policies:
             if region_name:
-                return f"📋 **{region_name} 지역의 청소년정책을 찾을 수 없습니다.**"
-            return "📋 청소년정책을 찾을 수 없습니다."
-        
-        output = [f"📋 **청소년정책** (총 {len(policies)}건, 지역 관련성 순)\n"]
-        
+                return f"📋 **{region_name} 지역의 청년정책을 찾을 수 없습니다.**"
+            return "📋 청년정책을 찾을 수 없습니다."
+
+        output = [f"📋 **청년정책** (총 {len(policies)}건, 지역 관련성 순)\n"]
+
         for i, policy in enumerate(policies[:limit], 1):
-            # 기본 정보
             name = policy.get("plcyNm", "정책명 없음")
             category = policy.get("lclsfNm", "") + " > " + policy.get("mclsfNm", "")
             keywords = policy.get("plcyKywdNm", "")
             region = policy.get("sprvsnInstCdNm", "")
             explanation = policy.get("plcyExplnCn", "")
-            
-            # 정책 번호로 상세 URL 생성
+
             policy_no = policy.get("plcyNo", "")
             detail_url = ""
             if policy_no:
                 detail_url = f"https://www.youthcenter.go.kr/youthPolicy/ythPlcyTotalSearch/ythPlcyDetail/{policy_no}"
-            
-            # 정책 범위 표시
+
             zip_codes = policy.get('zipCd', '')
             if zip_codes:
                 region_count = len(zip_codes.split(',')) if ',' in zip_codes else 1
@@ -346,239 +341,180 @@ class PerfectChatbot:
                     scope_display = "지역특화"
             else:
                 scope_display = "범위미상"
-            
-            # === 추가 상세 정보들 ===
-            support_content = policy.get("plcySprtCn", "")  # 지원내용
-            business_start = policy.get("bizPrdBgngYmd", "")  # 사업기간시작일자
-            business_end = policy.get("bizPrdEndYmd", "")  # 사업기간종료일자
-            apply_period = policy.get("aplyYmd", "")  # 신청기간
-            support_scale = policy.get("sprtSclCnt", "")  # 지원규모수
-            additional_conditions = policy.get("addAplyQlfcCndCn", "")  # 추가신청자격조건내용
-            participation_target = policy.get("ptcpPrpTrgtCn", "")  # 참여제안대상내용
-            apply_method = policy.get("plcyAplyMthdCn", "")  # 정책신청방법내용
-            
-            # 날짜 포맷팅 함수 (개선됨)
+
+            support_content = policy.get("plcySprtCn", "")
+            business_start = policy.get("bizPrdBgngYmd", "")
+            business_end = policy.get("bizPrdEndYmd", "")
+            apply_period = policy.get("aplyYmd", "")
+            support_scale = policy.get("sprtSclCnt", "")
+            additional_conditions = policy.get("addAplyQlfcCndCn", "")
+            participation_target = policy.get("ptcpPrpTrgtCn", "")
+            apply_method = policy.get("plcyAplyMthdCn", "")
+
             def format_date(date_str):
                 if date_str and len(date_str) == 8 and date_str.isdigit():
                     return f"{date_str[:4]}년 {date_str[4:6]}월 {date_str[6:]}일"
                 return date_str
-            
-            # 신청기간 포맷팅 함수 (새로 추가)
+
             def format_apply_period(apply_str):
                 if not apply_str:
                     return ""
-                
-                # "20250514 ~ 20250608" 같은 형태 처리
                 if " ~ " in apply_str:
                     dates = apply_str.split(" ~ ")
                     if len(dates) == 2:
                         start_formatted = format_date(dates[0].strip())
                         end_formatted = format_date(dates[1].strip())
                         return f"{start_formatted} ~ {end_formatted}"
-                
-                # 단일 날짜나 다른 형태 처리
                 return format_date(apply_str)
-            
-            # 사업기간 조합 (개선됨)
+
             business_period = ""
             if business_start and business_end:
-                # 빈 문자열이나 의미없는 값 체크
                 if business_start.strip() and business_end.strip() and business_start != "00000000" and business_end != "00000000":
                     business_period = f"{format_date(business_start)} ~ {format_date(business_end)}"
             elif business_start and business_start.strip() and business_start != "00000000":
                 business_period = f"{format_date(business_start)} ~"
             elif business_end and business_end.strip() and business_end != "00000000":
                 business_period = f"~ {format_date(business_end)}"
-            
-            # 출력 시작
+
             output.append(f"{'='*60}")
             output.append(f"📍 **{i}. {name}**")
-            
-            # 정책 설명 (정책명 바로 다음에 배치)
+
             if explanation:
-                # 전체 설명을 보여주되, 너무 길면 일부만
                 if len(explanation) > 200:
                     output.append(f"📝 **설명**: {explanation[:200]}...")
                 else:
                     output.append(f"📝 **설명**: {explanation}")
-                output.append("")  # 설명 다음에 빈 줄 추가
-            
+                output.append("")
+
             output.append(f"📂 **분류**: {category}")
             output.append(f"🎯 **적용범위**: {scope_display}")
-            
-            # 기본 정보들
             if keywords:
                 output.append(f"🏷️ **키워드**: {keywords}")
             if region:
                 output.append(f"🌍 **담당기관**: {region}")
-            
-            # === 새로 추가되는 상세 정보들 ===
             if support_content:
                 output.append(f"💰 **지원내용**: {support_content}")
-            
             if business_period:
                 output.append(f"📅 **사업 운영 기간**: {business_period}")
-                
+
             if apply_period:
                 formatted_apply_period = format_apply_period(apply_period)
                 if formatted_apply_period:
                     output.append(f"📋 **사업 신청기간**: {formatted_apply_period}")
-                
+
             if support_scale and support_scale != "0":
                 output.append(f"👥 **지원 규모**: {support_scale}명")
-                
             if apply_method:
                 output.append(f"📝 **신청방법**: {apply_method}")
-                
             if additional_conditions:
                 output.append(f"📌 **추가 사항**: {additional_conditions}")
-                
             if participation_target:
                 output.append(f"🚫 **참여제한 대상**: {participation_target}")
-
-            # 상세 링크
             if detail_url:
                 output.append(f"🔗 **상세링크**: {detail_url}")
-            
-            output.append("")  # 정책 간 구분을 위한 빈 줄
-            
+            output.append("")
+
         return "\n".join(output)
 
     def filter_and_sort_jobs_by_region(self, jobs: List[Dict], target_region_code: str) -> List[Dict]:
-        """채용정보를 지역 관련성에 따라 정렬 (개선된 버전)"""
-        # 지역 코드 → 우선순위 키워드 매핑
+        """채용정보를 지역 관련성에 따라 정렬 (5개 지역 전용)"""
         region_mapping = {
-            "11110": ["종로", "서울"],          # 종로구 → 종로 우선, 서울 차순위
-            "11680": ["강남", "서울"], 
-            "11170": ["용산", "서울"],
-            "11200": ["성동", "서울"],
-            "11215": ["광진", "서울"],
-            "44131": ["천안", "충남", "충청"],   # 천안시 → 천안 우선, 충남 차순위
-            "42150": ["강릉", "강원"],          # 강릉시 → 강릉 우선, 강원 차순위
-            "44790": ["청양", "충남", "충청"]
+            "51770": ["정선", "강원"],
+            "51750": ["영월", "강원"],
+            "44790": ["청양", "충남", "충청"],
+            "51150": ["강릉", "강원"],
+            "52210": ["김제", "전북", "전라"],
         }
-        
+
         if target_region_code not in region_mapping:
-            return jobs[:10]  # 매핑 없으면 상위 10개만
-        
+            return jobs[:10]
+
         target_keywords = region_mapping[target_region_code]
-        
+
         def calculate_job_score(job):
-            """채용공고의 지역 관련성 점수 계산"""
             work_region = job.get("workRgnNmLst", "").replace(" ", "")
-            
             if not work_region:
-                return (999, 0)  # 지역 정보 없으면 최하위
-            
-            # 지역 개수 계산 (콤마로 구분)
+                return (999, 0)
             region_count = work_region.count(',') + 1 if work_region else 0
-            
-            # 관련성 점수 계산
-            relevance_score = 999  # 기본값 (관련 없음)
-            
+            relevance_score = 999
             for i, keyword in enumerate(target_keywords):
                 if keyword in work_region:
-                    relevance_score = i  # 첫 번째 키워드가 가장 높은 점수
+                    relevance_score = i
                     break
-            
-            # 정렬 기준: (관련성 점수, 지역 개수)
-            # 관련성 점수가 낮을수록 우선 (0이 최고), 지역 개수가 적을수록 우선
             return (relevance_score, region_count)
-        
-        # 모든 채용공고에 점수 부여 후 정렬
+
         scored_jobs = [(job, calculate_job_score(job)) for job in jobs]
         sorted_jobs = sorted(scored_jobs, key=lambda x: x[1])
-        
-        # 상위 15개만 반환 (너무 많으면 부담)
         result_jobs = [job for job, score in sorted_jobs[:15]]
-        
         return result_jobs
-    
+
     def filter_and_sort_policies_by_region(self, policies: List[Dict], target_region_code: str) -> List[Dict]:
-        """청소년정책을 지역 관련성에 따라 정렬 (일자리와 동일한 알고리즘)"""
-        # 지역 코드 → 우선순위 키워드 매핑 (일자리와 동일)
+        """청년정책 지역 관련성 정렬 (5개 지역 전용)"""
         region_mapping = {
-            "11110": ["종로", "서울"],          # 종로구
-            "11680": ["강남", "서울"], 
-            "11170": ["용산", "서울"],
-            "11200": ["성동", "서울"],
-            "11215": ["광진", "서울"],
-            "44131": ["천안", "충남", "충청"],   # 천안시
-            "42150": ["강릉", "강원"],          # 강릉시
-            "44790": ["청양", "충남", "충청"]
+            "51770": ["정선", "강원"],
+            "51750": ["영월", "강원"],
+            "44790": ["청양", "충남", "충청"],
+            "51150": ["강릉", "강원"],
+            "52210": ["김제", "전북", "전라"],
         }
-        
+
         if target_region_code not in region_mapping:
-            return policies[:10]  # 매핑 없으면 상위 10개만
-        
+            return policies[:10]
+
         target_keywords = region_mapping[target_region_code]
-        
+
         def calculate_policy_score(policy):
-            """정책의 지역 관련성 점수 계산"""
-            # 1. 담당기관명에서 지역 키워드 찾기
             institution = policy.get("sprvsnInstCdNm", "").replace(" ", "")
-            
-            # 2. zipCd에서 지역 범위 확인
             zip_codes = policy.get('zipCd', '')
             region_count = len(zip_codes.split(',')) if zip_codes and ',' in zip_codes else 1
-            
-            # 3. 관련성 점수 계산
-            relevance_score = 999  # 기본값 (관련 없음)
-            
-            # 담당기관명에서 키워드 매칭
+            relevance_score = 999
             for i, keyword in enumerate(target_keywords):
                 if keyword in institution:
-                    relevance_score = i  # 첫 번째 키워드가 가장 높은 점수
+                    relevance_score = i
                     break
-            
-            # zipCd에 해당 지역 코드가 포함되어 있는지 확인
-            if relevance_score == 999 and zip_codes:  # 담당기관으로 매칭 안됐을 때
+            if relevance_score == 999 and zip_codes:
                 if target_region_code in zip_codes:
-                    relevance_score = len(target_keywords)  # 마지막 순위로 설정
-            
-            # 정렬 기준: (관련성 점수, 지역 개수)
+                    relevance_score = len(target_keywords)
             return (relevance_score, region_count)
-        
-        # 모든 정책에 점수 부여 후 정렬
+
         scored_policies = [(policy, calculate_policy_score(policy)) for policy in policies]
         sorted_policies = sorted(scored_policies, key=lambda x: x[1])
-        
-        # 상위 15개만 반환
         result_policies = [policy for policy, score in sorted_policies[:15]]
-        
         return result_policies
-    
+
     async def handle_search(self, intent: Dict[str, Any]) -> str:
         """검색 의도에 따라 적절한 검색 수행 (정책 검색 + 날짜 필터링)"""
         region_code = intent.get("region_mentioned") or self.state["region_code"]
+
+        # ✅ 지역 제한 검증
+        if region_code not in self.allowed_regions_code_to_name:
+            allowed_list = ", ".join([f"{name}({code})" for code, name in self.allowed_regions_code_to_name.items()])
+            return f"❌ 지원하지 않는 지역입니다. 사용 가능 지역: {allowed_list}"
+
         region_name = self.get_region_name(region_code)
-        
         results = []
-        
+
         try:
-            # 1. 채용정보 검색
+            # 1) 채용정보
             if intent["search_jobs"]:
                 print("📋 채용정보 검색 중...")
                 job_result = self.orchestrator.call_recruitment_tool(
                     'listRecruitments',
                     {
-                        'pageNo': 1, 
-                        'numOfRows': 100,  # 필터링을 위해 많이 가져오기
-                        'filters': {**intent.get("filters", {}), 
-                                   **({} if self.state["job_field"] is None else {"ncsCdLst": self.state["job_field"]})}
+                        'pageNo': 1,
+                        'numOfRows': 100,
+                        'filters': {**intent.get("filters", {}),
+                                    **({} if self.state["job_field"] is None else {"ncsCdLst": self.state["job_field"]})}
                     }
                 )
-                
                 if job_result["status"] == "success":
                     job_data = job_result["result"].get("data", {}).get("result", [])
-                    # 개선된 지역별 정렬 적용
-                    if intent.get("region_mentioned"):
-                        job_data = self.filter_and_sort_jobs_by_region(job_data, intent["region_mentioned"])
+                    job_data = self.filter_and_sort_jobs_by_region(job_data, region_code)
                     results.append(self.format_job_results(job_data, limit=5, region_name=region_name))
                 else:
                     results.append(f"📋 채용정보 검색 실패: {job_result.get('message', '알 수 없는 오류')}")
-            
-            # 2. 부동산 검색
+
+            # 2) 부동산
             if intent["search_realestate"]:
                 print("🏠 부동산 검색 중...")
                 apt_result = self.orchestrator.call_realestate_tool(
@@ -590,70 +526,55 @@ class PerfectChatbot:
                         'numOfRows': 10
                     }
                 )
-                
                 if apt_result["status"] == "success":
                     apt_text = apt_result["result"].get("text", "")
                     apt_data = self.parse_apartment_xml(apt_text)
                     results.append(self.format_realestate_results(apt_data, limit=5))
                 else:
                     results.append(f"🏠 부동산 검색 실패: {apt_result.get('message', '알 수 없는 오류')}")
-            
-            # 3. 청소년정책 검색 (날짜 필터링 추가)
+
+            # 3) 청년정책
             if intent["search_policies"]:
-                print("📋 청소년정책 검색 중...")
+                print("📋 청년정책 검색 중...")
                 policy_result = self.orchestrator.call_youth_policy_tool(
                     'searchPoliciesByRegion',
                     {
                         'regionCode': region_code,
                         'pageNum': 1,
-                        'pageSize': 30  # 필터링을 고려해서 더 많이 가져오기
+                        'pageSize': 30
                     }
                 )
-                
                 if policy_result["status"] == "success":
                     policies = policy_result["result"].get("policies", [])
-                    
-                    # === 유효한 정책만 필터링 (새로 추가) ===
                     active_policies = self.filter_active_policies(policies)
-                    
-                    # 지역별 정렬 (기존 코드)
-                    if intent.get("region_mentioned"):
-                        active_policies = self.filter_and_sort_policies_by_region(active_policies, intent["region_mentioned"])
-                    
-                    # 상위 5개만 표시
+                    active_policies = self.filter_and_sort_policies_by_region(active_policies, region_code)
                     active_policies = active_policies[:5]
-                    
                     results.append(self.format_policy_results(active_policies, limit=5, region_name=region_name))
-                    
-                    # 필터링 정보 추가
                     if len(policies) > len(active_policies):
-                        results.append(f"ℹ️ 총 {len(policies)}개 정책 중 현재 신청 가능한 {len(active_policies)}개 정책을 표시했습니다.")
+                        results.append(f"ℹ️ 총 {len(policies)}개 중 현재 신청 가능한 {len(active_policies)}개 정책을 표시했습니다.")
                 else:
-                    results.append(f"📋 청소년정책 검색 실패: {policy_result.get('message', '알 수 없는 오류')}")
-        
+                    results.append(f"📋 청년정책 검색 실패: {policy_result.get('message', '알 수 없는 오류')}")
+
         except Exception as e:
             return f"❌ 검색 중 오류가 발생했습니다: {str(e)}"
-        
+
         if results:
             return f"\n🔍 **{region_name} 검색 결과**\n\n" + "\n\n".join(results)
         else:
             return "❌ 검색 결과를 찾을 수 없습니다."
-    
+
     def parse_apartment_xml(self, xml_text: str) -> List[Dict]:
-        """XML 형태의 아파트 데이터를 파싱 (기존과 동일)"""
+        """XML 형태의 아파트 데이터를 파싱"""
         import xml.etree.ElementTree as ET
-        
         try:
             root = ET.fromstring(xml_text)
             items = root.findall('.//item')
-            
             apt_list = []
             for item in items:
                 apt_data = {}
                 for child in item:
                     apt_data[child.tag] = child.text.strip() if child.text else ""
                 apt_list.append(apt_data)
-            
             return apt_list
         except Exception as e:
             print(f"XML 파싱 오류: {e}")
@@ -662,45 +583,44 @@ class PerfectChatbot:
     async def run(self):
         """챗봇 메인 실행 루프"""
         print("🤖 통합 정보 조회 플랫폼이 시작되었습니다!")
-        print("💼 채용정보 + 🏠 부동산 + 📋 청소년정책을 통합 검색할 수 있습니다.")
+        print("💼 채용정보 + 🏠 부동산 + 📋 청년정책을 통합 검색할 수 있습니다.")
         print("⏰ 현재 신청 가능한 정책만 표시됩니다.\n")
-        
+        print("📍 지원 지역: 정선군(51770), 영월군(51750), 청양군(44790), 강릉시(51150), 김제시(52210)\n")
+
         # 직무 분야 안내
         print("📋 **검색 가능한 직무 분야:**")
         print("=" * 60)
         fields_list = list(self.job_fields.keys())
-        
-        # 4열로 정렬해서 출력
         for i in range(0, len(fields_list), 4):
             row = fields_list[i:i+4]
             print("  ".join(f"{field:<15}" for field in row))
         print("=" * 60)
-        print("💡 사용법: '종로구 통신 일자리', '강남구 의료 분야 채용' 등\n")
-        
+        print("💡 예: '강릉시 통신 일자리', '영월군 의료 분야 채용' 등\n")
+
         self.print_help()
-        
+
         while True:
             try:
                 user_input = input("\n💬 > ").strip()
             except (EOFError, KeyboardInterrupt):
                 print("\n👋 플랫폼을 종료합니다. 좋은 하루 되세요!")
                 break
-            
+
             if not user_input:
                 continue
-            
-            # 명령어 처리 (기존과 동일)
+
+            # 명령어 처리
             if user_input.lower() in ["/exit", "exit", "quit", "종료"]:
                 print("👋 플랫폼을 종료합니다. 좋은 하루 되세요!")
                 break
-                
+
             elif user_input.lower() in ["/help", "help", "도움말"]:
                 self.print_help()
                 continue
-                
+
             elif user_input.lower() == "/show":
                 print("📊 현재 설정:")
-                print(f"  📍 지역: {self.get_region_name(self.state['region_code'])}")
+                print(f"  📍 지역: {self.get_region_name(self.state['region_code'])} ({self.state['region_code']})")
                 print(f"  📅 거래년월: {self.state['deal_ymd']}")
                 if self.state["job_field"]:
                     field_name = [k for k, v in self.job_fields.items() if v == self.state["job_field"]][0]
@@ -708,14 +628,26 @@ class PerfectChatbot:
                 else:
                     print(f"  🔧 직무분야: 전체")
                 continue
-                
+
             elif user_input.startswith("/region "):
-                region_code = user_input.split(" ", 1)[1].strip()
-                self.state["region_code"] = region_code
-                region_name = self.get_region_name(region_code)
-                print(f"📍 지역이 {region_name}({region_code})로 설정되었습니다.")
+                raw = user_input.split(" ", 1)[1].strip()
+                new_code = None
+                # 코드로 입력
+                if raw in self.allowed_regions_code_to_name:
+                    new_code = raw
+                # 이름으로 입력
+                elif raw in self.allowed_regions_name_to_code:
+                    new_code = self.allowed_regions_name_to_code[raw]
+
+                if new_code:
+                    self.state["region_code"] = new_code
+                    region_name = self.get_region_name(new_code)
+                    print(f"📍 지역이 {region_name}({new_code})로 설정되었습니다.")
+                else:
+                    allowed = ", ".join([f"{name}({code})" for code, name in self.allowed_regions_code_to_name.items()])
+                    print(f"❌ 지원하지 않는 지역입니다. 사용 가능 지역: {allowed}")
                 continue
-                
+
             elif user_input.startswith("/date "):
                 date = user_input.split(" ", 1)[1].strip()
                 if len(date) == 6 and date.isdigit():
@@ -724,7 +656,7 @@ class PerfectChatbot:
                 else:
                     print("❌ 날짜 형식: YYYYMM (예: 202506)")
                 continue
-                
+
             elif user_input.startswith("/jobs "):
                 try:
                     count = int(user_input.split(" ", 1)[1].strip())
@@ -733,7 +665,7 @@ class PerfectChatbot:
                 except:
                     print("❌ 사용법: /jobs <숫자> (예: /jobs 10)")
                 continue
-                
+
             elif user_input.startswith("/field "):
                 field_name = user_input.split(" ", 1)[1].strip()
                 if field_name in self.job_fields:
@@ -743,25 +675,22 @@ class PerfectChatbot:
                     self.state["job_field"] = None
                     print("🔧 직무 분야 필터가 해제되었습니다.")
                 else:
-                    print("❌ 사용 가능한 분야:")
+                    print("❌ 사용 가능한 분야 일부:")
                     fields = list(self.job_fields.keys())[:12]
                     for i in range(0, len(fields), 3):
                         row = fields[i:i+3]
                         print("  ".join(f"{field:<20}" for field in row))
                     print("💡 사용법: /field <분야명> 또는 /field 전체")
                 continue
-            
+
             # 자연어 검색 처리
             intent = self.analyze_user_intent(user_input)
             print(f"🔍 분석된 의도: {intent['type']}")
-            
+
             if intent["type"] == "unknown":
-                print("🤔 무엇을 도와드릴까요? 다음과 같이 검색해보세요:")
-                print("예: '종로구에서 통신 관련 일자리와 아파트 매물, 정책 알려줘'")
-                print("    '강남구 의료 분야 채용공고만 보여줘'")
-                print("    '천안시 청년 정책만 검색해줘'")
+                print("🤔 무엇을 도와드릴까요? 예: '강릉시에서 통신 일자리와 아파트 매물, 정책 알려줘'")
                 continue
-            
+
             # 검색 실행
             result = await self.handle_search(intent)
             print(result)
