@@ -1,8 +1,9 @@
-# perfect_chatbot.py — 완벽한 통합 챗봇 (정책 조회 추가)
+# perfect_chatbot.py — 완벽한 통합 챗봇 (정책 조회 + 날짜 필터링)
 import asyncio
 import json
 import re
 from typing import Dict, Any, List, Optional
+from datetime import datetime
 
 # 확장된 오케스트레이터 import
 from enhanced_orchestrator import EnhancedOrchestrator
@@ -189,6 +190,43 @@ class PerfectChatbot:
         }
         return code_to_name.get(region_code, f"지역코드 {region_code}")
     
+    def filter_active_policies(self, policies: List[Dict]) -> List[Dict]:
+        """현재 날짜 기준으로 유효한 정책만 필터링"""
+        today = datetime.now().strftime("%Y%m%d")
+        active_policies = []
+        
+        for policy in policies:
+            is_active = True
+            
+            # 1. 사업 종료일 체크
+            biz_end_date = policy.get("bizPrdEndYmd", "")
+            if biz_end_date and len(biz_end_date) == 8 and biz_end_date.isdigit():
+                if biz_end_date < today:
+                    is_active = False
+                    continue
+            
+            # 2. 신청 마감일 체크 (aplyYmd에서 종료일 추출)
+            apply_period = policy.get("aplyYmd", "")
+            if apply_period and " ~ " in apply_period:
+                dates = apply_period.split(" ~ ")
+                if len(dates) == 2:
+                    end_date = dates[1].strip()
+                    if len(end_date) == 8 and end_date.isdigit():
+                        if end_date < today:
+                            is_active = False
+                            continue
+            elif apply_period and len(apply_period) == 8 and apply_period.isdigit():
+                # 단일 날짜인 경우 (마감일로 간주)
+                if apply_period < today:
+                    is_active = False
+                    continue
+            
+            # 3. 상시 신청이거나 날짜 정보가 없으면 활성으로 간주
+            if is_active:
+                active_policies.append(policy)
+        
+        return active_policies
+    
     def format_job_results(self, results: List[Dict], limit: int = 5, region_name: str = "") -> str:
         """채용정보 결과를 보기 좋게 포맷 (지역 관련성 표시 추가)"""
         if not results:
@@ -271,9 +309,8 @@ class PerfectChatbot:
         
         return "\n".join(output)
     
-
     def format_policy_results(self, policies: List[Dict], limit: int = 5, region_name: str = "") -> str:
-        """청소년정책 결과를 보기 좋게 포맷 (상세 링크 추가)"""
+        """청소년정책 결과를 상세 정보와 함께 보기 좋게 포맷 (개선된 날짜 포맷팅)"""
         if not policies:
             if region_name:
                 return f"📋 **{region_name} 지역의 청소년정책을 찾을 수 없습니다.**"
@@ -282,11 +319,12 @@ class PerfectChatbot:
         output = [f"📋 **청소년정책** (총 {len(policies)}건, 지역 관련성 순)\n"]
         
         for i, policy in enumerate(policies[:limit], 1):
+            # 기본 정보
             name = policy.get("plcyNm", "정책명 없음")
             category = policy.get("lclsfNm", "") + " > " + policy.get("mclsfNm", "")
             keywords = policy.get("plcyKywdNm", "")
             region = policy.get("sprvsnInstCdNm", "")
-            explanation = policy.get("plcyExplnCn", "")[:100]
+            explanation = policy.get("plcyExplnCn", "")
             
             # 정책 번호로 상세 URL 생성
             policy_no = policy.get("plcyNo", "")
@@ -309,25 +347,102 @@ class PerfectChatbot:
             else:
                 scope_display = "범위미상"
             
-            output.append(f"{'='*50}")
+            # === 추가 상세 정보들 ===
+            support_content = policy.get("plcySprtCn", "")  # 지원내용
+            business_start = policy.get("bizPrdBgngYmd", "")  # 사업기간시작일자
+            business_end = policy.get("bizPrdEndYmd", "")  # 사업기간종료일자
+            apply_period = policy.get("aplyYmd", "")  # 신청기간
+            support_scale = policy.get("sprtSclCnt", "")  # 지원규모수
+            additional_conditions = policy.get("addAplyQlfcCndCn", "")  # 추가신청자격조건내용
+            participation_target = policy.get("ptcpPrpTrgtCn", "")  # 참여제안대상내용
+            apply_method = policy.get("plcyAplyMthdCn", "")  # 정책신청방법내용
+            
+            # 날짜 포맷팅 함수 (개선됨)
+            def format_date(date_str):
+                if date_str and len(date_str) == 8 and date_str.isdigit():
+                    return f"{date_str[:4]}년 {date_str[4:6]}월 {date_str[6:]}일"
+                return date_str
+            
+            # 신청기간 포맷팅 함수 (새로 추가)
+            def format_apply_period(apply_str):
+                if not apply_str:
+                    return ""
+                
+                # "20250514 ~ 20250608" 같은 형태 처리
+                if " ~ " in apply_str:
+                    dates = apply_str.split(" ~ ")
+                    if len(dates) == 2:
+                        start_formatted = format_date(dates[0].strip())
+                        end_formatted = format_date(dates[1].strip())
+                        return f"{start_formatted} ~ {end_formatted}"
+                
+                # 단일 날짜나 다른 형태 처리
+                return format_date(apply_str)
+            
+            # 사업기간 조합 (개선됨)
+            business_period = ""
+            if business_start and business_end:
+                # 빈 문자열이나 의미없는 값 체크
+                if business_start.strip() and business_end.strip() and business_start != "00000000" and business_end != "00000000":
+                    business_period = f"{format_date(business_start)} ~ {format_date(business_end)}"
+            elif business_start and business_start.strip() and business_start != "00000000":
+                business_period = f"{format_date(business_start)} ~"
+            elif business_end and business_end.strip() and business_end != "00000000":
+                business_period = f"~ {format_date(business_end)}"
+            
+            # 출력 시작
+            output.append(f"{'='*60}")
             output.append(f"📍 **{i}. {name}**")
+            
+            # 정책 설명 (정책명 바로 다음에 배치)
+            if explanation:
+                # 전체 설명을 보여주되, 너무 길면 일부만
+                if len(explanation) > 200:
+                    output.append(f"📝 **설명**: {explanation[:200]}...")
+                else:
+                    output.append(f"📝 **설명**: {explanation}")
+                output.append("")  # 설명 다음에 빈 줄 추가
+            
             output.append(f"📂 **분류**: {category}")
             output.append(f"🎯 **적용범위**: {scope_display}")
             
-            # 상세 링크 추가
-            if detail_url:
-                output.append(f"🔗 **상세링크**: {detail_url}")
-            
+            # 기본 정보들
             if keywords:
                 output.append(f"🏷️ **키워드**: {keywords}")
             if region:
                 output.append(f"🌍 **담당기관**: {region}")
-            if explanation:
-                output.append(f"📝 **설명**: {explanation}...")
-            output.append("")
+            
+            # === 새로 추가되는 상세 정보들 ===
+            if support_content:
+                output.append(f"💰 **지원내용**: {support_content}")
+            
+            if business_period:
+                output.append(f"📅 **사업 운영 기간**: {business_period}")
+                
+            if apply_period:
+                formatted_apply_period = format_apply_period(apply_period)
+                if formatted_apply_period:
+                    output.append(f"📋 **사업 신청기간**: {formatted_apply_period}")
+                
+            if support_scale and support_scale != "0":
+                output.append(f"👥 **지원 규모**: {support_scale}명")
+                
+            if apply_method:
+                output.append(f"📝 **신청방법**: {apply_method}")
+                
+            if additional_conditions:
+                output.append(f"📌 **추가 사항**: {additional_conditions}")
+                
+            if participation_target:
+                output.append(f"🚫 **참여제한 대상**: {participation_target}")
+
+            # 상세 링크
+            if detail_url:
+                output.append(f"🔗 **상세링크**: {detail_url}")
+            
+            output.append("")  # 정책 간 구분을 위한 빈 줄
             
         return "\n".join(output)
-
 
     def filter_and_sort_jobs_by_region(self, jobs: List[Dict], target_region_code: str) -> List[Dict]:
         """채용정보를 지역 관련성에 따라 정렬 (개선된 버전)"""
@@ -432,109 +547,9 @@ class PerfectChatbot:
         result_policies = [policy for policy, score in sorted_policies[:15]]
         
         return result_policies
-        """청소년정책을 지역 관련성에 따라 정렬 (일자리와 동일한 알고리즘)"""
-        # 지역 코드 → 우선순위 키워드 매핑 (일자리와 동일)
-        region_mapping = {
-            "11110": ["종로", "서울"],          # 종로구
-            "11680": ["강남", "서울"], 
-            "11170": ["용산", "서울"],
-            "11200": ["성동", "서울"],
-            "11215": ["광진", "서울"],
-            "44131": ["천안", "충남", "충청"],   # 천안시
-            "42150": ["강릉", "강원"],          # 강릉시
-            "44790": ["청양", "충남", "충청"]
-        }
-        
-        if target_region_code not in region_mapping:
-            return policies[:10]  # 매핑 없으면 상위 10개만
-        
-        target_keywords = region_mapping[target_region_code]
-        
-        def calculate_policy_score(policy):
-            """정책의 지역 관련성 점수 계산"""
-            # 1. 담당기관명에서 지역 키워드 찾기
-            institution = policy.get("sprvsnInstCdNm", "").replace(" ", "")
-            
-            # 2. zipCd에서 지역 범위 확인
-            zip_codes = policy.get('zipCd', '')
-            region_count = len(zip_codes.split(',')) if zip_codes and ',' in zip_codes else 1
-            
-            # 3. 관련성 점수 계산
-            relevance_score = 999  # 기본값 (관련 없음)
-            
-            # 담당기관명에서 키워드 매칭
-            for i, keyword in enumerate(target_keywords):
-                if keyword in institution:
-                    relevance_score = i  # 첫 번째 키워드가 가장 높은 점수
-                    break
-            
-            # zipCd에 해당 지역 코드가 포함되어 있는지 확인
-            if relevance_score == 999 and zip_codes:  # 담당기관으로 매칭 안됐을 때
-                if target_region_code in zip_codes:
-                    relevance_score = len(target_keywords)  # 마지막 순위로 설정
-            
-            # 정렬 기준: (관련성 점수, 지역 개수)
-            return (relevance_score, region_count)
-        
-        # 모든 정책에 점수 부여 후 정렬
-        scored_policies = [(policy, calculate_policy_score(policy)) for policy in policies]
-        sorted_policies = sorted(scored_policies, key=lambda x: x[1])
-        
-        # 상위 15개만 반환
-        result_policies = [policy for policy, score in sorted_policies[:15]]
-        
-        return result_policies
-        """채용정보를 지역 관련성에 따라 정렬 (개선된 버전)"""
-        # 지역 코드 → 우선순위 키워드 매핑
-        region_mapping = {
-            "11110": ["종로", "서울"],          # 종로구 → 종로 우선, 서울 차순위
-            "11680": ["강남", "서울"], 
-            "11170": ["용산", "서울"],
-            "11200": ["성동", "서울"],
-            "11215": ["광진", "서울"],
-            "44131": ["천안", "충남", "충청"],   # 천안시 → 천안 우선, 충남 차순위
-            "42150": ["강릉", "강원"],          # 강릉시 → 강릉 우선, 강원 차순위
-            "44790": ["청양", "충남", "충청"]
-        }
-        
-        if target_region_code not in region_mapping:
-            return jobs[:10]  # 매핑 없으면 상위 10개만
-        
-        target_keywords = region_mapping[target_region_code]
-        
-        def calculate_job_score(job):
-            """채용공고의 지역 관련성 점수 계산"""
-            work_region = job.get("workRgnNmLst", "").replace(" ", "")
-            
-            if not work_region:
-                return (999, 0)  # 지역 정보 없으면 최하위
-            
-            # 지역 개수 계산 (콤마로 구분)
-            region_count = work_region.count(',') + 1 if work_region else 0
-            
-            # 관련성 점수 계산
-            relevance_score = 999  # 기본값 (관련 없음)
-            
-            for i, keyword in enumerate(target_keywords):
-                if keyword in work_region:
-                    relevance_score = i  # 첫 번째 키워드가 가장 높은 점수
-                    break
-            
-            # 정렬 기준: (관련성 점수, 지역 개수)
-            # 관련성 점수가 낮을수록 우선 (0이 최고), 지역 개수가 적을수록 우선
-            return (relevance_score, region_count)
-        
-        # 모든 채용공고에 점수 부여 후 정렬
-        scored_jobs = [(job, calculate_job_score(job)) for job in jobs]
-        sorted_jobs = sorted(scored_jobs, key=lambda x: x[1])
-        
-        # 상위 15개만 반환 (너무 많으면 부담)
-        result_jobs = [job for job, score in sorted_jobs[:15]]
-        
-        return result_jobs
     
     async def handle_search(self, intent: Dict[str, Any]) -> str:
-        """검색 의도에 따라 적절한 검색 수행 (정책 검색 추가)"""
+        """검색 의도에 따라 적절한 검색 수행 (정책 검색 + 날짜 필터링)"""
         region_code = intent.get("region_mentioned") or self.state["region_code"]
         region_name = self.get_region_name(region_code)
         
@@ -583,7 +598,7 @@ class PerfectChatbot:
                 else:
                     results.append(f"🏠 부동산 검색 실패: {apt_result.get('message', '알 수 없는 오류')}")
             
-            # 3. 청소년정책 검색 (새로 추가)
+            # 3. 청소년정책 검색 (날짜 필터링 추가)
             if intent["search_policies"]:
                 print("📋 청소년정책 검색 중...")
                 policy_result = self.orchestrator.call_youth_policy_tool(
@@ -591,16 +606,28 @@ class PerfectChatbot:
                     {
                         'regionCode': region_code,
                         'pageNum': 1,
-                        'pageSize': 15
+                        'pageSize': 30  # 필터링을 고려해서 더 많이 가져오기
                     }
                 )
                 
                 if policy_result["status"] == "success":
                     policies = policy_result["result"].get("policies", [])
-                    # 개선된 지역별 정렬 적용 (일자리와 동일)
+                    
+                    # === 유효한 정책만 필터링 (새로 추가) ===
+                    active_policies = self.filter_active_policies(policies)
+                    
+                    # 지역별 정렬 (기존 코드)
                     if intent.get("region_mentioned"):
-                        policies = self.filter_and_sort_policies_by_region(policies, intent["region_mentioned"])
-                    results.append(self.format_policy_results(policies, limit=5, region_name=region_name))
+                        active_policies = self.filter_and_sort_policies_by_region(active_policies, intent["region_mentioned"])
+                    
+                    # 상위 5개만 표시
+                    active_policies = active_policies[:5]
+                    
+                    results.append(self.format_policy_results(active_policies, limit=5, region_name=region_name))
+                    
+                    # 필터링 정보 추가
+                    if len(policies) > len(active_policies):
+                        results.append(f"ℹ️ 총 {len(policies)}개 정책 중 현재 신청 가능한 {len(active_policies)}개 정책을 표시했습니다.")
                 else:
                     results.append(f"📋 청소년정책 검색 실패: {policy_result.get('message', '알 수 없는 오류')}")
         
@@ -635,7 +662,8 @@ class PerfectChatbot:
     async def run(self):
         """챗봇 메인 실행 루프"""
         print("🤖 통합 정보 조회 플랫폼이 시작되었습니다!")
-        print("💼 채용정보 + 🏠 부동산 + 📋 청소년정책을 통합 검색할 수 있습니다.\n")
+        print("💼 채용정보 + 🏠 부동산 + 📋 청소년정책을 통합 검색할 수 있습니다.")
+        print("⏰ 현재 신청 가능한 정책만 표시됩니다.\n")
         
         # 직무 분야 안내
         print("📋 **검색 가능한 직무 분야:**")
