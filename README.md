@@ -30,7 +30,7 @@ pip install mcp fastmcp httpx python-dotenv
 python final_chatbot.py
 ```
 
-#파일구조
+## 3. 파일구조
 ```bash
 HUSS/
 ├─ src/                         
@@ -40,6 +40,15 @@ HUSS/
 │  ├─ enhanced_orchestrator.py  # MCP 연결 오케스트레이터
 │  ├─ final_chatbot.py          # CLI 용 
 └─ 
+```
+
+## 4. 지역 행정코드
+```bash
+강릉 51150
+정선 51770
+영월 51750
+김제 52210
+청양 44790
 ```
 
 ## 사용
