@@ -271,8 +271,9 @@ class PerfectChatbot:
         
         return "\n".join(output)
     
+
     def format_policy_results(self, policies: List[Dict], limit: int = 5, region_name: str = "") -> str:
-        """청소년정책 결과를 보기 좋게 포맷 (지역 관련성 표시 추가)"""
+        """청소년정책 결과를 보기 좋게 포맷 (상세 링크 추가)"""
         if not policies:
             if region_name:
                 return f"📋 **{region_name} 지역의 청소년정책을 찾을 수 없습니다.**"
@@ -287,7 +288,13 @@ class PerfectChatbot:
             region = policy.get("sprvsnInstCdNm", "")
             explanation = policy.get("plcyExplnCn", "")[:100]
             
-            # 정책 범위 표시 (일자리와 유사)
+            # 정책 번호로 상세 URL 생성
+            policy_no = policy.get("plcyNo", "")
+            detail_url = ""
+            if policy_no:
+                detail_url = f"https://www.youthcenter.go.kr/youthPolicy/ythPlcyTotalSearch/ythPlcyDetail/{policy_no}"
+            
+            # 정책 범위 표시
             zip_codes = policy.get('zipCd', '')
             if zip_codes:
                 region_count = len(zip_codes.split(',')) if ',' in zip_codes else 1
@@ -307,6 +314,10 @@ class PerfectChatbot:
             output.append(f"📂 **분류**: {category}")
             output.append(f"🎯 **적용범위**: {scope_display}")
             
+            # 상세 링크 추가
+            if detail_url:
+                output.append(f"🔗 **상세링크**: {detail_url}")
+            
             if keywords:
                 output.append(f"🏷️ **키워드**: {keywords}")
             if region:
@@ -316,7 +327,8 @@ class PerfectChatbot:
             output.append("")
             
         return "\n".join(output)
-    
+
+
     def filter_and_sort_jobs_by_region(self, jobs: List[Dict], target_region_code: str) -> List[Dict]:
         """채용정보를 지역 관련성에 따라 정렬 (개선된 버전)"""
         # 지역 코드 → 우선순위 키워드 매핑
