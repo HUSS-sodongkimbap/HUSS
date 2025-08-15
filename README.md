@@ -30,6 +30,18 @@ pip install mcp fastmcp httpx python-dotenv
 python final_chatbot.py
 ```
 
+#파일구조
+'''bash
+HUSS/
+├─ src/                         
+│  ├─ server.py                 # 일자리 MCP
+│  ├─ youth_policy_server.py    # 정책 MCP
+│  ├─ realestate_server.py      # 부동산 MCP
+│  ├─ enhanced_orchestrator.py  # MCP 연결 오케스트레이터
+│  ├─ final_chatbot.py          # CLI 용 
+└─ 
+'''
+
 ## 사용
 MCP 클라이언트(예: IDE/챗봇)에서 아래 툴을 호출:
 - listRecruitments: { "path": "recruitment/목록_엔드포인트", "filters": {"region":"R3010","empType":"R1010"} }
